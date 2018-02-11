@@ -69,8 +69,12 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     ]
     if dry:
         rsync_flags.append('-n')
-    branch = sp.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).decode().strip()
-    mainline = sp.check_output(['git', 'merge-base', 'HEAD', 'origin/master']).decode().strip()
+    branch = sp.check_output(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
+    ).decode().strip()
+    mainline = sp.check_output(
+        ['git', 'merge-base', 'HEAD', 'origin/master']
+    ).decode().strip()
     if profile:
         branch = f'{branch}:{profile}'
     sha, diff = get_diff(mainline)
@@ -85,7 +89,9 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         sp.check_call(['ssh', host, ':'])
         print(f'Syncing {branch} to {host}...')
         if hasattr(conf, 'presync'):
-            conf.presync(lambda src, tgt: git_rsync(src, f'{host}:{tgt}', rsync_flags))
+            conf.presync(
+                lambda src, tgt: git_rsync(src, f'{host}:{tgt}', rsync_flags)
+            )
         sp.check_call(['ssh', host, f'mkdir -p {dest/prefix}'])
         git_rsync('.', f'{host}:{dest/prefix/top}', rsync_flags)
     else:
@@ -94,33 +100,24 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         git_rsync('.', dest/prefix/top, rsync_flags)
     if dry:
         return
-    build_script = ['set -e']
+    build_script = ['set -e', f'pushd {dest}']
     if hasattr(conf, 'prebuild'):
-        build_script.append(conf.prebuild)
+        build_script.extend(["echo 'Running prebuild hook...'", conf.prebuild])
     build_script.extend([
+        f'pushd {prefix}/{top}',
         f"echo 'Building with `{cmd}`...'",
-        f'pushd {dest/prefix/top}',
         cmd,
-        f'pushd {dest}',
+        f'popd',
     ])
     if hasattr(conf, 'postbuild'):
-        build_script.append(conf.postbuild)
+        build_script.extend(["echo 'Running postbuild hook...'", conf.postbuild])
     build_script = Template('\n'.join(build_script)).safe_substitute({
-        'PREFIX': prefix,
-        'SHA': sha,
-        'TOP': top,
-        'BRANCH': branch,
+        'PREFIX': prefix, 'SHA': sha, 'TOP': top, 'BRANCH': branch,
     })
     msg = f'Finished compiling {name} at {sha}'
     if host:
         print(f'Connecting to {host} to make {sha} from {branch}...')
-        script_file = sp.run(
-            ['ssh', host, 'F=$(mktemp) && cat >$F && echo $F'],
-            check=True,
-            input=build_script.encode(),
-            stdout=sp.PIPE
-        ).stdout.decode()
-        sp.run(['ssh', '-t', host, f'cd {dest} && bash {script_file}'], check=True)
+        sp.run(['ssh', '-t', host, build_script], check=True)
         msg += f' on {host}'
     else:
         sp.check_call(build_script, shell=True)
