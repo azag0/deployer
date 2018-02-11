@@ -17,13 +17,15 @@ class Context:
 
 
 def git_rsync(repo, to, flags):
+    repo = str(repo)
+    to = str(to)
     dirs = set()
     files = []
     for path in sp.check_output(['git', 'ls-files'], cwd=repo).split():
         files.append(path)
         dirs.update(Path(path.decode()).parents)
     files.extend(f'{path}\n'.encode() for path in dirs)
-    args = ['rsync', *flags, repo + '/', str(to)]
+    args = ['rsync', *flags, repo + '/', to + '/']
     sp.run(args, input=b'\n'.join(files), check=True)
 
 
@@ -44,8 +46,8 @@ def notify(title, msg):
     ])
 
 
-def get_diff(path, mainline):
-    diff = sp.check_output(['git', 'diff', mainline], cwd=path)
+def get_diff(mainline):
+    diff = sp.check_output(['git', 'diff', mainline])
     difftext = f'master: {mainline}\n'
     if diff.strip():
         difftext += str(diff)
@@ -70,11 +72,11 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     ]
     if dry:
         rsync_flags.append('-n')
-    branch = sp.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=top).decode().strip()
-    mainline = sp.check_output(['git', 'merge-base', 'HEAD', 'origin/master'], cwd=top).decode().strip()
+    branch = sp.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).decode().strip()
+    mainline = sp.check_output(['git', 'merge-base', 'HEAD', 'origin/master']).decode().strip()
     if profile:
         branch = f'{branch}:{profile}'
-    sha, diff = get_diff(top, mainline)
+    sha, diff = get_diff(mainline)
     mainline, sha = mainline[:7], sha[:7]
     if sha != mainline:
         print(f'Got diff {sha} of {branch} with respect to {mainline} (master).')
@@ -89,12 +91,12 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
             ctx = Context(host=host, dest=dest, git_sync=partial(git_rsync, flags=rsync_flags))
             conf.presync(ctx)
         sp.check_call(['ssh', host, f'mkdir -p {prefix}'])
-        git_rsync(top, f'{host}:{prefix/top}', rsync_flags)
+        git_rsync('.', f'{host}:{prefix/top}', rsync_flags)
     else:
         dest = dest.expanduser()
         prefix = prefix.expanduser()
         prefix.mkdir(exist_ok=True)
-        git_rsync(top, prefix/top, rsync_flags)
+        git_rsync('.', prefix/top, rsync_flags)
     if dry:
         return
     build_script = ['set -e']
@@ -102,7 +104,7 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         build_script.append(conf.prebuild)
     build_script.extend([
         f"echo 'Building with `{cmd}`...'",
-        f'pushd {prefix}',
+        f'pushd {prefix/top}',
         cmd,
         'popd',
     ])
