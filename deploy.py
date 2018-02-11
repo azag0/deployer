@@ -6,26 +6,19 @@ import os
 import tarfile
 from tempfile import NamedTemporaryFile
 from argparse import ArgumentParser
-from functools import partial
 from string import Template
 
 
-class Context:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-def git_rsync(repo, to, flags):
-    repo = str(repo)
-    to = str(to)
+def git_rsync(src, tgt, flags):
+    src = str(src)
+    tgt = str(tgt)
     dirs = set()
     files = []
-    for path in sp.check_output(['git', 'ls-files'], cwd=repo).split():
+    for path in sp.check_output(['git', 'ls-files'], cwd=src).split():
         files.append(path)
         dirs.update(Path(path.decode()).parents)
     files.extend(f'{path}\n'.encode() for path in dirs)
-    args = ['rsync', *flags, repo + '/', to + '/']
+    args = ['rsync', *flags, src + '/', tgt + '/']
     sp.run(args, input=b'\n'.join(files), check=True)
 
 
@@ -61,7 +54,7 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     name = conf.name
     top = conf.top
     cmd = cmd or conf.cmd
-    dest = Path('~/var/Builds')/conf.name
+    dest = Path(conf.dest)
     rsync_flags = [
         '-ai',
         '--delete-excluded',
@@ -82,21 +75,19 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         print(f'Got diff {sha} of {branch} with respect to {mainline} (master).')
     else:
         print(f'On mainline {mainline} (master).')
-    save_diff(Path.home()/'Archive/diffs', f'{name}-{sha}', diff)
-    prefix = dest/'branches'/branch
+    save_diff(Path(conf.diffdir).expanduser(), f'{name}-{sha}', diff)
+    prefix = f'branches/{branch}'
     if host:
         sp.check_call(['ssh', host, ':'])
         print(f'Syncing {branch} to {host}...')
         if hasattr(conf, 'presync'):
-            ctx = Context(host=host, dest=dest, git_sync=partial(git_rsync, flags=rsync_flags))
-            conf.presync(ctx)
-        sp.check_call(['ssh', host, f'mkdir -p {prefix}'])
-        git_rsync('.', f'{host}:{prefix/top}', rsync_flags)
+            conf.presync(lambda src, tgt: git_rsync(src, f'{host}:{tgt}', rsync_flags))
+        sp.check_call(['ssh', host, f'mkdir -p {dest/prefix}'])
+        git_rsync('.', f'{host}:{dest/prefix/top}', rsync_flags)
     else:
         dest = dest.expanduser()
-        prefix = prefix.expanduser()
-        prefix.mkdir(exist_ok=True)
-        git_rsync('.', prefix/top, rsync_flags)
+        (dest/prefix).mkdir(exist_ok=True)
+        git_rsync('.', dest/prefix/top, rsync_flags)
     if dry:
         return
     build_script = ['set -e']
@@ -104,14 +95,13 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         build_script.append(conf.prebuild)
     build_script.extend([
         f"echo 'Building with `{cmd}`...'",
-        f'pushd {prefix/top}',
+        f'pushd {dest/prefix/top}',
         cmd,
-        'popd',
+        f'pushd {dest}',
     ])
     if hasattr(conf, 'postbuild'):
         build_script.append(conf.postbuild)
     build_script = Template('\n'.join(build_script)).safe_substitute({
-        'DEST': dest,
         'PREFIX': prefix,
         'SHA': sha,
         'TOP': top,
