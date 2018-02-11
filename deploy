@@ -11,12 +11,18 @@ from tempfile import NamedTemporaryFile
 from argparse import ArgumentParser
 from string import Template
 
+from typing import Union, List, Set, Tuple, Callable, Any, Dict, IO
+import os  # noqa
 
-def git_rsync(src, tgt, flags):
+_Path = Union['os.PathLike[str]', str]
+
+
+def git_rsync(src: _Path, tgt: _Path, flags: List[str]) -> None:
     src = str(src)
     tgt = str(tgt)
-    dirs = set()
+    dirs: Set[Path] = set()
     files = []
+    path: bytes
     for path in sp.check_output(['git', 'ls-files'], cwd=src).split():
         files.append(path)
         dirs.update(Path(path.decode()).parents)
@@ -25,7 +31,8 @@ def git_rsync(src, tgt, flags):
     sp.run(args, input=b'\n'.join(files), check=True)
 
 
-def save_diff(diffdir, name, diff):
+def save_diff(diffdir: Path, name: str, diff: str) -> None:
+    f: IO[str]
     with NamedTemporaryFile('w') as f:
         f.write(diff)
         f.flush()
@@ -35,8 +42,8 @@ def save_diff(diffdir, name, diff):
     print(f'Saved diff to {archive}.')
 
 
-def get_diff(mainline):
-    diff = sp.check_output(['git', 'diff', mainline])
+def get_diff(mainline: str) -> Tuple[str, str]:
+    diff: bytes = sp.check_output(['git', 'diff', mainline])
     difftext = f'master: {mainline}\n'
     if diff.strip():
         difftext += str(diff)
@@ -46,20 +53,37 @@ def get_diff(mainline):
         return mainline, difftext
 
 
-def notify(title, msg):
+def notify(title: str, msg: str) -> None:
     sp.check_call([
         'reattach-to-user-namespace',
         'terminal-notifier', '-message', msg, '-title', title
     ])
 
 
-def deploy(conf, host=None, cmd=None, profile=None, dry=False):
+# should be a Protocol, but I don't want to use typing_extensions
+class Configuration:
+    name: str
+    dest: str
+    top: str
+    cmd: str
+    include: List[str]
+    exclude: List[str]
+    diffdir: str
+    prebuild: str
+    postbuild: str
+
+    @staticmethod
+    def presync(sync: Callable[[str, str], None]) -> None: ...
+
+
+def deploy(conf: Configuration, host: str = None, cmd: str = None,
+           profile: str = None, dry: bool = False) -> None:
     name = conf.name
     top = conf.top
     cmd = cmd or conf.cmd
     dest = Path(conf.dest)
     diffdir = Path(conf.diffdir).expanduser()
-    rsync_flags = [
+    rsync_flags: List[str] = [
         '-ai',
         '--delete-excluded',
         '--include-from=-',
@@ -69,10 +93,10 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     ]
     if dry:
         rsync_flags.append('-n')
-    branch = sp.check_output(
+    branch: str = sp.check_output(
         ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
     ).decode().strip()
-    mainline = sp.check_output(
+    mainline: str = sp.check_output(
         ['git', 'merge-base', 'HEAD', 'origin/master']
     ).decode().strip()
     if profile:
@@ -100,18 +124,18 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         git_rsync('.', dest/prefix/top, rsync_flags)
     if dry:
         return
-    build_script = ['set -e', f'pushd {dest}']
+    build_lines = ['set -e', f'pushd {dest}']
     if hasattr(conf, 'prebuild'):
-        build_script.extend(["echo 'Running prebuild hook...'", conf.prebuild])
-    build_script.extend([
+        build_lines.extend(["echo 'Running prebuild hook...'", conf.prebuild])
+    build_lines.extend([
         f'pushd {prefix}/{top}',
         f"echo 'Building with `{cmd}`...'",
         cmd,
         f'popd',
     ])
     if hasattr(conf, 'postbuild'):
-        build_script.extend(["echo 'Running postbuild hook...'", conf.postbuild])
-    build_script = Template('\n'.join(build_script)).safe_substitute({
+        build_lines.extend(["echo 'Running postbuild hook...'", conf.postbuild])
+    build_script = Template('\n'.join(build_lines)).safe_substitute({
         'PREFIX': prefix, 'SHA': sha, 'TOP': top, 'BRANCH': branch,
     })
     msg = f'Finished compiling {name} at {sha}'
@@ -124,13 +148,13 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     notify(name, msg)
 
 
-def main(**kwargs):
+def main(**kwargs: Any) -> None:
     sys.path.append('.')
-    import deploy_conf as conf
+    import deploy_conf as conf  # type: ignore
     deploy(conf, **kwargs)
 
 
-def parse_cli():
+def parse_cli() -> Dict[str, Any]:
     parser = ArgumentParser(add_help=False)
     arg = parser.add_argument
     arg('-h', '--host')
