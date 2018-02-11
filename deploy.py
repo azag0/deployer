@@ -1,9 +1,8 @@
-from pathlib import Path
 import hashlib
 import sys
-import subprocess as sp
-import os
 import tarfile
+import subprocess as sp
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 from argparse import ArgumentParser
 from string import Template
@@ -29,14 +28,7 @@ def save_diff(diffdir, name, diff):
         archive = f'{name}.diff.tar.gz'
         with tarfile.open(str(diffdir/archive), 'w|gz') as archfile:
             archfile.add(f.name, 'diff')
-    print('Saved diff to {}.'.format(archive))
-
-
-def notify(title, msg):
-    sp.check_call([
-        'reattach-to-user-namespace',
-        'terminal-notifier', '-message', msg, '-title', title
-    ])
+    print(f'Saved diff to {archive}.')
 
 
 def get_diff(mainline):
@@ -50,11 +42,19 @@ def get_diff(mainline):
         return mainline, difftext
 
 
+def notify(title, msg):
+    sp.check_call([
+        'reattach-to-user-namespace',
+        'terminal-notifier', '-message', msg, '-title', title
+    ])
+
+
 def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     name = conf.name
     top = conf.top
     cmd = cmd or conf.cmd
     dest = Path(conf.dest)
+    diffdir = Path(conf.diffdir).expanduser()
     rsync_flags = [
         '-ai',
         '--delete-excluded',
@@ -75,7 +75,7 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
         print(f'Got diff {sha} of {branch} with respect to {mainline} (master).')
     else:
         print(f'On mainline {mainline} (master).')
-    save_diff(Path(conf.diffdir).expanduser(), f'{name}-{sha}', diff)
+    save_diff(diffdir, f'{name}-{sha}', diff)
     prefix = f'branches/{branch}'
     if host:
         sp.check_call(['ssh', host, ':'])
@@ -123,9 +123,7 @@ def deploy(conf, host=None, cmd=None, profile=None, dry=False):
     notify(name, msg)
 
 
-def main(change_dir=None, only_build=False, **kwargs):
-    if change_dir:
-        os.chdir(change_dir)
+def main(**kwargs):
     sys.path.append('.')
     import deploy_conf as conf
     deploy(conf, **kwargs)
@@ -134,7 +132,6 @@ def main(change_dir=None, only_build=False, **kwargs):
 def parse_cli():
     parser = ArgumentParser(add_help=False)
     arg = parser.add_argument
-    arg('-C', metavar='DIR', dest='change_dir')
     arg('-h', '--host')
     arg('-p', '--profile')
     arg('-n', '--dry', action='store_true')
