@@ -60,35 +60,20 @@ def notify(title: str, msg: str) -> None:
     ])
 
 
-# should be a Protocol, but I don't want to use typing_extensions
-class Configuration:
-    name: str
-    dest: str
-    top: str
-    cmd: str
-    include: List[str]
-    exclude: List[str]
-    diffdir: str
-    prebuild: str
-    postbuild: str
-
-    @staticmethod
-    def presync(sync: Callable[[str, str], None]) -> None: ...
-
-
-def deploy(conf: Configuration, host: str = None, cmd: str = None,
-           profile: str = None, dry: bool = False) -> None:
-    name = conf.name
-    top = conf.top
-    cmd = cmd or conf.cmd
-    dest = Path(conf.dest)
-    diffdir = Path(conf.diffdir).expanduser()
+def deploy(name: str, dest: Union[str, Path], cmd: str, top: str = '.',
+           include: List[str] = None, exclude: List[str] = None,
+           diffdir: Union[str, Path] = None, prebuild: str = None,
+           postbuild: str = None,
+           presync: Callable[[Callable[[str, str], None]], None] = None,
+           host: str = None, profile: str = None, dry: bool = False) -> None:
+    dest = Path(dest)
+    diffdir = Path(diffdir).expanduser() if diffdir else None
     rsync_flags: List[str] = [
         '-ai',
         '--delete-excluded',
         '--include-from=-',
-        *('--include=' + patt for patt in getattr(conf, 'include', [])),
-        *('--filter=P ' + patt for patt in getattr(conf, 'exclude', [])),
+        *('--include=' + patt for patt in include or []),
+        *('--filter=P ' + patt for patt in exclude or []),
         '--exclude=*'
     ]
     if dry:
@@ -107,13 +92,14 @@ def deploy(conf: Configuration, host: str = None, cmd: str = None,
         print(f'Got diff {sha} of {branch} with respect to {mainline} (master).')
     else:
         print(f'On mainline {mainline} (master).')
-    save_diff(diffdir, f'{name}-{sha}', diff)
+    if diffdir:
+        save_diff(diffdir, f'{name}-{sha}', diff)
     prefix = f'branches/{branch}'
     if host:
         sp.check_call(['ssh', host, ':'])
         print(f'Syncing {branch} to {host}...')
-        if hasattr(conf, 'presync'):
-            conf.presync(
+        if presync:
+            presync(
                 lambda src, tgt: git_rsync(src, f'{host}:{tgt}', rsync_flags)
             )
         sp.check_call(['ssh', host, f'mkdir -p {dest/prefix}'])
@@ -125,16 +111,16 @@ def deploy(conf: Configuration, host: str = None, cmd: str = None,
     if dry:
         return
     build_lines = ['set -e', f'pushd {dest}']
-    if hasattr(conf, 'prebuild'):
-        build_lines.extend(["echo 'Running prebuild hook...'", conf.prebuild])
+    if prebuild:
+        build_lines.extend(["echo 'Running prebuild hook...'", prebuild])
     build_lines.extend([
         f'pushd {prefix}/{top}',
         f"echo 'Building with `{cmd}`...'",
         cmd,
         f'popd',
     ])
-    if hasattr(conf, 'postbuild'):
-        build_lines.extend(["echo 'Running postbuild hook...'", conf.postbuild])
+    if postbuild:
+        build_lines.extend(["echo 'Running postbuild hook...'", postbuild])
     build_script = Template('\n'.join(build_lines)).safe_substitute({
         'PREFIX': prefix, 'SHA': sha, 'TOP': top, 'BRANCH': branch,
     })
@@ -148,10 +134,13 @@ def deploy(conf: Configuration, host: str = None, cmd: str = None,
     notify(name, msg)
 
 
-def main(**kwargs: Any) -> None:
+def main(**cli_args: Any) -> None:
     sys.path.append('.')
     import deploy_conf as conf  # type: ignore
-    deploy(conf, **kwargs)
+    deploy(**{
+        **{k: v for k, v in vars(conf).items() if not k.startswith('_')},
+        **{k: v for k, v in cli_args.items() if v is not None}
+    })
 
 
 def parse_cli() -> Dict[str, Any]:
