@@ -121,9 +121,9 @@ def deploy(name: str, dest: Union[str, Path], cmd: str, top: str = '.',
     ])
     if postbuild:
         build_lines.extend(["echo 'Running postbuild hook...'", postbuild])
-    build_script = Template('\n'.join(build_lines)).safe_substitute({
-        'PREFIX': prefix, 'SHA': sha, 'TOP': top, 'BRANCH': branch,
-    })
+    build_script = Template('\n'.join(build_lines)).safe_substitute(
+        PREFIX=prefix, SHA=sha, TOP=top, BRANCH=branch,
+    )
     msg = f'Finished compiling {name} at {sha}'
     if host:
         print(f'Connecting to {host} to make {sha} from {branch}...')
